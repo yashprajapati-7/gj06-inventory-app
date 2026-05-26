@@ -13,17 +13,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Write config.php from secret
-        run: echo "${{ secrets.CONFIG_PHP }}" | base64 -d > config.php
-
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ secrets.FTP_REMOTE_DIR }}   # e.g.  /htdocs/
+          server-dir: ${{ secrets.FTP_REMOTE_DIR }}
           exclude: |
             **/.git*
             **/.git*/**
             **/node_modules/**
+            config.php
+            config.example.php
