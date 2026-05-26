@@ -1,0 +1,16 @@
+# Never commit live credentials
+config.php
+
+# Claude Code local settings
+.claude/
+
+# Windows junk
+Thumbs.db
+desktop.ini
+
+# Editor folders
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
