@@ -1,0 +1,6 @@
+{
+  "name": "gj06/inventory-app",
+  "require": {
+    "php": ">=8.0"
+  }
+}
