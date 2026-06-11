@@ -2,10 +2,29 @@
 require_once __DIR__ . '/functions.php';
 require_login();
 
-$userId = (int)$_SESSION['user_id'];
-$role = $_SESSION['role'];
+$userId     = (int)$_SESSION['user_id'];
+$role       = $_SESSION['role'];
 $supplierId = isset($_GET['supplier_id']) ? (int)$_GET['supplier_id'] : 0;
-$groups = [];
+$groups     = [];
+$meta       = ['subtitle' => 'Date: ' . date('d M Y'), 'company_name' => 'GJ06 Cafe & Bakehouse'];
+
+// Admin + specific supplier: save order record and PDF to disk
+if ($role === 'admin' && $supplierId > 0) {
+    $checkTable = $conn->query("SHOW TABLES LIKE 'orders'");
+    if ($checkTable && $checkTable->num_rows > 0) {
+        $itemStmt = $conn->prepare("SELECT p.id AS product_id, p.product_name, p.op AS quantity, p.unit, p.unit_price FROM products p WHERE p.supplier_id = ? AND p.op > 0");
+        $itemStmt->bind_param("i", $supplierId);
+        $itemStmt->execute();
+        $orderItems = $itemStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        if (!empty($orderItems)) {
+            $orderId     = save_order_record($conn, $supplierId, $userId, $orderItems);
+            $pdfFilename = 'order_' . $orderId . '_' . date('Y-m-d') . '.pdf';
+            update_order_pdf($conn, $orderId, $pdfFilename);
+            $meta['save_path'] = __DIR__ . '/storage/orders/' . $pdfFilename;
+        }
+    }
+}
 
 if ($role === 'admin') {
     if ($supplierId > 0) {
@@ -37,19 +56,14 @@ if ($role === 'admin') {
 while ($row = $result->fetch_assoc()) {
     $supplierName = $row['supplier_name'] ?? 'Unknown Supplier';
     if (!isset($groups[$supplierName])) {
-        $groups[$supplierName] = [
-            'supplier_name' => $supplierName,
-            'rows' => [],
-        ];
+        $groups[$supplierName] = ['supplier_name' => $supplierName, 'rows' => []];
     }
-
     $groups[$supplierName]['rows'][] = [
         'product_name' => $row['product_name'],
-        'po' => (int)$row['po'],
-        'unit' => $row['unit'],
+        'po'           => (int)$row['po'],
+        'unit'         => $row['unit'],
     ];
 }
 
-$subtitle = 'Date: ' . date('d M Y');
-create_grouped_reorder_pdf('Reorder Products', array_values($groups), 'reorder_products.pdf', ['subtitle' => $subtitle, 'company_name' => 'GJ06 Cafe & Bakehouse']);
+create_grouped_reorder_pdf('Reorder Products', array_values($groups), 'reorder_products.pdf', $meta);
 ?>

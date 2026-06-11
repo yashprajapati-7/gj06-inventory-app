@@ -75,6 +75,7 @@ if (isset($_POST['save_product']) && is_admin()) {
     $unit = trim($_POST['unit'] ?? '');
     $soh = max((int)($_POST['soh'] ?? 0), 0);
     $mos = max((int)($_POST['csoh'] ?? 0), 0);
+    $unitPrice = max((float)($_POST['unit_price'] ?? 0), 0.0);
 
     if ($productName === '') {
         $error = 'Product name is required.';
@@ -86,11 +87,11 @@ if (isset($_POST['save_product']) && is_admin()) {
         $po = max($mos - $soh, 0);
 
         if ($editId > 0) {
-            $stmt = $conn->prepare('UPDATE products SET supplier_id=?, product_name=?, unit=?, soh=?, csoh=?, op=? WHERE id=?');
-            $stmt->bind_param('issiiii', $supplierPost, $productName, $unit, $soh, $mos, $po, $editId);
+            $stmt = $conn->prepare('UPDATE products SET supplier_id=?, product_name=?, unit=?, soh=?, csoh=?, op=?, unit_price=? WHERE id=?');
+            $stmt->bind_param('issiiidi', $supplierPost, $productName, $unit, $soh, $mos, $po, $unitPrice, $editId);
         } else {
-            $stmt = $conn->prepare('INSERT INTO products(supplier_id, product_name, unit, soh, csoh, op) VALUES(?, ?, ?, ?, ?, ?)');
-            $stmt->bind_param('issiii', $supplierPost, $productName, $unit, $soh, $mos, $po);
+            $stmt = $conn->prepare('INSERT INTO products(supplier_id, product_name, unit, soh, csoh, op, unit_price) VALUES(?, ?, ?, ?, ?, ?, ?)');
+            $stmt->bind_param('issiiid', $supplierPost, $productName, $unit, $soh, $mos, $po, $unitPrice);
         }
 
         if ($stmt->execute()) {
@@ -243,8 +244,13 @@ include __DIR__ . '/partials/header.php';
       <input type='number' value='<?= $editProduct ? max((int)$editProduct['csoh'] - (int)$editProduct['soh'], 0) : 0 ?>' placeholder='PO auto calculated' readonly>
     </div>
 
+    <div>
+      <label class='field-label'>Unit Price ($)</label>
+      <input type='number' name='unit_price' step='0.01' min='0' value='<?= esc(number_format((float)($editProduct['unit_price'] ?? 0), 2)) ?>' placeholder='e.g. 12.50 (used for spend analytics)'>
+    </div>
+
     <div class='full helper-box'>
-      MOS = Minimum operating stock. SOH = Stock on hand. PO = Purchase order = MOS - SOH.
+      MOS = Minimum operating stock. SOH = Stock on hand. PO = Purchase order = MOS - SOH. Unit Price is used to estimate reorder cost in Analytics.
     </div>
 
     <div class='full action-row'>
@@ -381,7 +387,7 @@ include __DIR__ . '/partials/header.php';
           <th>SOH</th>
           <th>MOS</th>
           <th>PO</th>
-          <?php if (is_admin()): ?><th>Action</th><?php endif; ?>
+          <?php if (is_admin()): ?><th>Price</th><th>Action</th><?php endif; ?>
         </tr>
       </thead>
       <tbody>
@@ -402,6 +408,7 @@ include __DIR__ . '/partials/header.php';
             <td><?= (int)$p['csoh'] ?></td>
             <td><?= (int)$p['op'] ?></td>
             <?php if (is_admin()): ?>
+              <td><?= (float)$p['unit_price'] > 0 ? '$' . number_format((float)$p['unit_price'], 2) : '<span style="color:#bbb">—</span>' ?></td>
               <td>
                 <div class='action-row action-row-inline'>
                   <a class='btn btn-small btn-outline' href='products.php?supplier_id=<?= (int)$supplierId ?>&edit_id=<?= (int)$p['id'] ?>'>Edit</a>
@@ -414,7 +421,7 @@ include __DIR__ . '/partials/header.php';
         <?php endwhile; ?>
         <?php if ($products->num_rows === 0): ?>
           <tr>
-            <td colspan='<?= is_admin() ? 8 : 7 ?>'>No products found for this supplier.</td>
+            <td colspan='<?= is_admin() ? 9 : 7 ?>'>No products found for this supplier.</td>
           </tr>
         <?php endif; ?>
       </tbody>

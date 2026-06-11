@@ -27,18 +27,23 @@
 </header>
 
 <?php if (is_admin()): ?>
+<?php $cp = basename($_SERVER['PHP_SELF']); ?>
 <nav class='icon-menu'>
-    <a href='products.php' class='icon-menu-item'>
+    <a href='products.php' class='icon-menu-item <?= $cp==='products.php' ? 'active' : '' ?>'>
       <span class='icon-emoji'>&#128230;</span>
       <span class='icon-label'>PRODUCTS</span>
     </a>
-    <a href='users.php' class='icon-menu-item'>
+    <a href='users.php' class='icon-menu-item <?= $cp==='users.php' ? 'active' : '' ?>'>
       <span class='icon-emoji'>&#128100;</span>
       <span class='icon-label'>USERS</span>
     </a>
-    <a href='supplier_select.php' class='icon-menu-item active'>
+    <a href='supplier_select.php' class='icon-menu-item <?= $cp==='supplier_select.php' ? 'active' : '' ?>'>
       <span class='icon-emoji'>&#127970;</span>
       <span class='icon-label'>SUPPLIERS</span>
+    </a>
+    <a href='admin_analytics.php' class='icon-menu-item <?= in_array($cp, ['admin_analytics.php','admin_orders.php','admin_invoices.php']) ? 'active' : '' ?>'>
+      <span class='icon-emoji'>&#128202;</span>
+      <span class='icon-label'>ANALYTICS</span>
     </a>
 </nav>
 <?php endif; ?>
@@ -56,6 +61,9 @@
     <?php if (is_admin()): ?>
       <a href='supplier_select.php' onclick='closeMenu()'>Suppliers</a>
       <a href='users.php' onclick='closeMenu()'>Users</a>
+      <a href='admin_analytics.php' onclick='closeMenu()'>Analytics</a>
+      <a href='admin_orders.php' onclick='closeMenu()'>Order History</a>
+      <a href='admin_invoices.php' onclick='closeMenu()'>Invoices</a>
     <?php endif; ?>
     <a href='logout.php' onclick='closeMenu()'>Logout</a>
   </nav>

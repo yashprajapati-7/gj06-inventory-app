@@ -158,6 +158,38 @@ function create_table_pdf($title, $rows, $outputName='purchase_order_sheet.pdf',
     exit;
 }
 
+function save_order_record($conn, $supplierId, $userId, $items) {
+    $orderDate = date('Y-m-d');
+    $totalItems = count($items);
+    $estimatedTotal = 0.0;
+    foreach ($items as $item) {
+        $estimatedTotal += (float)($item['unit_price'] ?? 0) * (int)($item['quantity'] ?? 0);
+    }
+    $stmt = $conn->prepare("INSERT INTO orders (supplier_id, order_date, ordered_by, total_items, estimated_total) VALUES (?, ?, ?, ?, ?)");
+    $stmt->bind_param("isiid", $supplierId, $orderDate, $userId, $totalItems, $estimatedTotal);
+    $stmt->execute();
+    $orderId = $conn->insert_id;
+
+    $iStmt = $conn->prepare("INSERT INTO order_items (order_id, product_id, product_name, quantity, unit, unit_price, line_total) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    foreach ($items as $item) {
+        $productId  = (int)($item['product_id'] ?? 0);
+        $productName = (string)($item['product_name'] ?? '');
+        $quantity   = (int)($item['quantity'] ?? 0);
+        $unit       = (string)($item['unit'] ?? '');
+        $unitPrice  = (float)($item['unit_price'] ?? 0);
+        $lineTotal  = round($quantity * $unitPrice, 2);
+        $iStmt->bind_param("iisisdd", $orderId, $productId, $productName, $quantity, $unit, $unitPrice, $lineTotal);
+        $iStmt->execute();
+    }
+    return $orderId;
+}
+
+function update_order_pdf($conn, $orderId, $pdfFilename) {
+    $stmt = $conn->prepare("UPDATE orders SET pdf_filename = ? WHERE id = ?");
+    $stmt->bind_param("si", $pdfFilename, $orderId);
+    $stmt->execute();
+}
+
 function create_grouped_reorder_pdf($title, $groups, $outputName='reorder_products.pdf', $meta=[]){
     $pageWidth = 595;
     $pageHeight = 842;
@@ -371,6 +403,12 @@ function create_grouped_reorder_pdf($title, $groups, $outputName='reorder_produc
     }
     $pdf .= "trailer\n<< /Size " . (count($objects) + 1) . " /Root 1 0 R >>\n";
     $pdf .= "startxref\n{$xrefPos}\n%%EOF";
+
+    if (!empty($meta['save_path'])) {
+        $saveDir = dirname($meta['save_path']);
+        if (!is_dir($saveDir)) { @mkdir($saveDir, 0755, true); }
+        @file_put_contents($meta['save_path'], $pdf);
+    }
 
     while (ob_get_level()) { ob_end_clean(); }
     header('Content-Type: application/pdf');

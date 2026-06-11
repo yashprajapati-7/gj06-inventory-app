@@ -121,7 +121,7 @@ body{background:#f4f4f4}
 .header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .datetime-pill{background:#2a2a2a;color:#fff;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:700}
 .logout-btn{background:#fff;color:#111;padding:10px 14px;border-radius:12px;font-weight:700}
-.icon-menu{background:#0b0b0b;border-top:1px solid #171717;border-bottom:12px solid #fff;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;text-align:center}
+.icon-menu{background:#0b0b0b;border-top:1px solid #171717;border-bottom:12px solid #fff;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;text-align:center}
 .menu-open-btn{height:64px;border:none;background:transparent;color:#fff;font-size:22px;cursor:pointer}
 .icon-menu-item{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:10px 6px;min-height:72px;width:100%;color:#9da3af}
 .icon-menu-item.active,.icon-menu-item:hover{color:#fff}
@@ -152,6 +152,25 @@ body{background:#f4f4f4}
 @media (min-width:900px){
   .top-header,.icon-menu,.page-shell{max-width:1000px;margin:0 auto}
 }
+/* ── Analytics styles ─────────────────────────────────── */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.stat-box{background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 4px 14px rgba(0,0,0,.07)}
+.stat-box .stat-label{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.stat-box .stat-value{font-size:26px;font-weight:800;color:#111;line-height:1}
+.stat-box .stat-sub{font-size:11px;color:#aaa;margin-top:4px}
+.stat-accent{border-left:4px solid #111}
+.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.bar-label{font-size:12px;color:#555;min-width:130px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-wrap{flex:1;background:#edf2f8;border-radius:999px;height:10px;overflow:hidden}
+.bar-fill{height:100%;background:#111;border-radius:999px}
+.bar-val{font-size:12px;font-weight:700;min-width:50px;text-align:right;flex-shrink:0}
+.month-badge{display:inline-flex;align-items:center;padding:4px 10px;background:#f3f5f8;border-radius:999px;font-size:12px;font-weight:700}
+.status-pill{display:inline-flex;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700}
+.status-pending{background:#fff8e6;color:#b36000}
+.status-received{background:#e6f7ee;color:#007a3e}
+.status-cancelled{background:#ffe8e8;color:#b00020}
+@media(min-width:900px){.stat-grid{grid-template-columns:repeat(4,1fr)}}
+/* ────────────────────────────────────────────────────── */
 @media (max-width:899px){
   .page-shell{padding-bottom:110px}
   .product-list-layout{gap:6px}
