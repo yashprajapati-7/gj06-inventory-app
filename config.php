@@ -25,6 +25,13 @@ if ($passwordColumn && ($column = $passwordColumn->fetch_assoc())) {
 $check = $conn->query("SHOW COLUMNS FROM products LIKE 'unit'");
 if ($check && $check->num_rows === 0) { $conn->query("ALTER TABLE products ADD COLUMN unit VARCHAR(20) NOT NULL DEFAULT 'kg' AFTER product_name"); }
 
+$checkPrice = $conn->query("SHOW COLUMNS FROM products LIKE 'unit_price'");
+if ($checkPrice && $checkPrice->num_rows === 0) { $conn->query("ALTER TABLE products ADD COLUMN unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00"); }
+
+$conn->query("CREATE TABLE IF NOT EXISTS orders (id INT(11) NOT NULL AUTO_INCREMENT, supplier_id INT(11) NOT NULL, order_date DATE NOT NULL, ordered_by INT(11) NOT NULL, pdf_filename VARCHAR(255) DEFAULT NULL, total_items INT(11) NOT NULL DEFAULT 0, estimated_total DECIMAL(10,2) NOT NULL DEFAULT 0.00, status ENUM('pending','received','cancelled') NOT NULL DEFAULT 'pending', notes TEXT DEFAULT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (id), KEY idx_supplier_date (supplier_id, order_date)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+$conn->query("CREATE TABLE IF NOT EXISTS order_items (id INT(11) NOT NULL AUTO_INCREMENT, order_id INT(11) NOT NULL, product_id INT(11) NOT NULL, product_name VARCHAR(150) NOT NULL, quantity INT(11) NOT NULL DEFAULT 0, unit VARCHAR(20) NOT NULL DEFAULT '', unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00, line_total DECIMAL(10,2) NOT NULL DEFAULT 0.00, PRIMARY KEY (id), KEY idx_order_id (order_id), KEY idx_product_id (product_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+$conn->query("CREATE TABLE IF NOT EXISTS invoices (id INT(11) NOT NULL AUTO_INCREMENT, order_id INT(11) DEFAULT NULL, supplier_id INT(11) NOT NULL, invoice_number VARCHAR(100) DEFAULT NULL, invoice_date DATE NOT NULL, total_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00, pdf_filename VARCHAR(255) DEFAULT NULL, notes TEXT DEFAULT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (id), KEY idx_supplier_date (supplier_id, invoice_date), KEY idx_order_id (order_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
 $admin = $conn->query("SELECT id, password FROM users WHERE username='admin' LIMIT 1");
 if ($admin && $admin->num_rows === 0) {
     $adminPassword = password_hash('admin123', PASSWORD_DEFAULT);
