@@ -2,320 +2,407 @@
 require_once __DIR__ . '/functions.php';
 require_admin();
 
-$checkTable = $conn->query("SHOW TABLES LIKE 'orders'");
-$analyticsReady = ($checkTable && $checkTable->num_rows > 0);
-
-if ($analyticsReady) {
-    // Summary stats
-    $r = $conn->query("SELECT COALESCE(SUM(total_amount),0) AS yr FROM invoices WHERE YEAR(invoice_date)=YEAR(CURDATE())")->fetch_assoc();
-    $totalYearSpend = (float)$r['yr'];
-
-    $r = $conn->query("SELECT COALESCE(SUM(total_amount),0) AS mo FROM invoices WHERE DATE_FORMAT(invoice_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m')")->fetch_assoc();
-    $thisMonthSpend = (float)$r['mo'];
-
-    $r = $conn->query("SELECT COUNT(*) AS cnt FROM orders WHERE YEAR(order_date)=YEAR(CURDATE())")->fetch_assoc();
-    $totalOrdersYear = (int)$r['cnt'];
-
-    $r = $conn->query("SELECT COUNT(*) AS cnt FROM invoices WHERE YEAR(invoice_date)=YEAR(CURDATE())")->fetch_assoc();
-    $totalInvoicesYear = (int)$r['cnt'];
-
-    // Monthly combined table — last 12 months
-    $monthlyData = [];
-    $ordersRes = $conn->query("SELECT DATE_FORMAT(order_date,'%Y-%m') AS ym, DATE_FORMAT(order_date,'%b %Y') AS lbl, COUNT(*) AS cnt, SUM(total_items) AS items, COALESCE(SUM(estimated_total),0) AS est FROM orders WHERE order_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) GROUP BY ym, lbl ORDER BY ym DESC");
-    while ($row = $ordersRes->fetch_assoc()) {
-        $monthlyData[$row['ym']] = ['lbl' => $row['lbl'], 'order_count' => (int)$row['cnt'], 'total_items' => (int)$row['items'], 'estimated_total' => (float)$row['est'], 'invoice_count' => 0, 'invoice_amount' => 0.0];
-    }
-    $invRes = $conn->query("SELECT DATE_FORMAT(invoice_date,'%Y-%m') AS ym, DATE_FORMAT(invoice_date,'%b %Y') AS lbl, COUNT(*) AS cnt, COALESCE(SUM(total_amount),0) AS amt FROM invoices WHERE invoice_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) GROUP BY ym, lbl ORDER BY ym DESC");
-    while ($row = $invRes->fetch_assoc()) {
-        if (!isset($monthlyData[$row['ym']])) {
-            $monthlyData[$row['ym']] = ['lbl' => $row['lbl'], 'order_count' => 0, 'total_items' => 0, 'estimated_total' => 0.0];
-        }
-        $monthlyData[$row['ym']]['invoice_count']  = (int)$row['cnt'];
-        $monthlyData[$row['ym']]['invoice_amount'] = (float)$row['amt'];
-    }
-    krsort($monthlyData);
-    $maxInvAmt = max(array_column($monthlyData, 'invoice_amount') ?: [0]);
-
-    // Supplier spending this year (from invoices)
-    $supplierSpend = $conn->query("SELECT s.supplier_name, COUNT(i.id) AS inv_count, COALESCE(SUM(i.total_amount),0) AS total FROM invoices i JOIN suppliers s ON s.id = i.supplier_id WHERE YEAR(i.invoice_date)=YEAR(CURDATE()) GROUP BY i.supplier_id, s.supplier_name ORDER BY total DESC");
-    $supplierRows = [];
-    while ($row = $supplierSpend->fetch_assoc()) { $supplierRows[] = $row; }
-    $maxSupplierAmt = max(array_column($supplierRows, 'total') ?: [0]);
-
-    // Top 10 most ordered products
-    $topProducts = $conn->query("SELECT oi.product_name, s.supplier_name, COUNT(DISTINCT oi.order_id) AS order_count, SUM(oi.quantity) AS total_qty FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN suppliers s ON s.id = o.supplier_id GROUP BY oi.product_id, oi.product_name, s.supplier_name ORDER BY total_qty DESC LIMIT 10");
-    $topRows = [];
-    while ($row = $topProducts->fetch_assoc()) { $topRows[] = $row; }
-    $maxQty = max(array_column($topRows, 'total_qty') ?: [0]);
-
-    // Current reorder needs with estimated cost
-    $currentReorders = $conn->query("SELECT p.product_name, s.supplier_name, p.op, p.soh, p.csoh, p.unit, p.unit_price, ROUND(p.op * p.unit_price, 2) AS est_cost FROM products p JOIN suppliers s ON s.id = p.supplier_id WHERE p.op > 0 ORDER BY est_cost DESC, p.op DESC LIMIT 30");
-    $reorderRows = [];
-    while ($row = $currentReorders->fetch_assoc()) { $reorderRows[] = $row; }
-    $totalReorderEst = (float)($conn->query("SELECT COALESCE(SUM(op * unit_price),0) AS t FROM products WHERE op > 0")->fetch_assoc()['t'] ?? 0);
+function an_rows($conn, $sql) {
+    $rows = [];
+    $res = $conn->query($sql);
+    while ($res && ($row = $res->fetch_assoc())) { $rows[] = $row; }
+    return $rows;
 }
+function an_pct($part, $total) { return $total > 0 ? round($part / $total * 100) : 0; }
+
+// Stock health: out = SOH 0, low = needs reorder (PO > 0) but still has stock, healthy = no PO needed
+$stock = $conn->query("SELECT COUNT(*) AS total,
+    SUM(soh = 0) AS out_cnt,
+    SUM(soh > 0 AND op > 0) AS low_cnt,
+    SUM(soh > 0 AND op = 0) AS ok_cnt,
+    COALESCE(SUM(op), 0) AS po_qty
+    FROM products")->fetch_assoc();
+$totalProducts = (int)$stock['total'];
+$outCount      = (int)$stock['out_cnt'];
+$lowCount      = (int)$stock['low_cnt'];
+$okCount       = (int)$stock['ok_cnt'];
+$poQty         = (int)$stock['po_qty'];
+$healthPct     = an_pct($okCount, $totalProducts);
+$supplierTotal = (int)($conn->query("SELECT COUNT(*) AS c FROM suppliers")->fetch_assoc()['c'] ?? 0);
+
+// Per-supplier health
+$supplierRows = an_rows($conn, "SELECT s.id, s.supplier_name,
+    COUNT(p.id) AS total,
+    COALESCE(SUM(p.soh = 0), 0) AS out_cnt,
+    COALESCE(SUM(p.soh > 0 AND p.op > 0), 0) AS low_cnt,
+    COALESCE(SUM(p.soh > 0 AND p.op = 0), 0) AS ok_cnt,
+    COALESCE(SUM(p.op), 0) AS po_qty
+    FROM suppliers s LEFT JOIN products p ON p.supplier_id = s.id
+    GROUP BY s.id, s.supplier_name
+    ORDER BY (COALESCE(SUM(p.soh = 0), 0) + COALESCE(SUM(p.soh > 0 AND p.op > 0), 0)) DESC, s.supplier_name ASC");
+
+// Products needing attention (out of stock or below MOS), lowest coverage first
+$attentionRows = an_rows($conn, "SELECT p.product_name, p.unit, p.soh, p.csoh, p.op, s.supplier_name
+    FROM products p JOIN suppliers s ON s.id = p.supplier_id
+    WHERE p.op > 0 OR p.soh = 0
+    ORDER BY (p.soh = 0) DESC, (p.soh / NULLIF(p.csoh, 0)) ASC, p.product_name ASC
+    LIMIT 200");
+
+// Products by unit
+$unitRows = an_rows($conn, "SELECT unit, COUNT(*) AS cnt FROM products GROUP BY unit ORDER BY cnt DESC, unit ASC");
+$maxUnit = max(array_column($unitRows, 'cnt') ?: [0]);
+
+// Orders
+$ordersOn = ($conn->query("SHOW TABLES LIKE 'orders'")->num_rows ?? 0) > 0;
+$ordersMonth = $ordersYear = 0;
+$lastOrder = null;
+$monthly = [];
+$topProducts = $topSuppliers = $recentOrders = [];
+if ($ordersOn) {
+    $ordersMonth = (int)$conn->query("SELECT COUNT(*) AS c FROM orders WHERE DATE_FORMAT(order_date,'%Y-%m') = DATE_FORMAT(CURDATE(),'%Y-%m')")->fetch_assoc()['c'];
+    $ordersYear  = (int)$conn->query("SELECT COUNT(*) AS c FROM orders WHERE YEAR(order_date) = YEAR(CURDATE())")->fetch_assoc()['c'];
+    $lastOrder   = $conn->query("SELECT MAX(order_date) AS d FROM orders")->fetch_assoc()['d'] ?? null;
+
+    for ($i = 11; $i >= 0; $i--) {
+        $ym = date('Y-m', strtotime("first day of -$i month"));
+        $monthly[$ym] = ['lbl' => date('M', strtotime($ym . '-01')), 'full' => date('F Y', strtotime($ym . '-01')), 'orders' => 0, 'items' => 0];
+    }
+    foreach (an_rows($conn, "SELECT DATE_FORMAT(order_date,'%Y-%m') AS ym, COUNT(*) AS cnt, COALESCE(SUM(total_items),0) AS items FROM orders WHERE order_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 11 MONTH), '%Y-%m-01') GROUP BY ym") as $row) {
+        if (isset($monthly[$row['ym']])) {
+            $monthly[$row['ym']]['orders'] = (int)$row['cnt'];
+            $monthly[$row['ym']]['items']  = (int)$row['items'];
+        }
+    }
+
+    $topProducts = an_rows($conn, "SELECT oi.product_name, s.supplier_name, COUNT(DISTINCT oi.order_id) AS times, SUM(oi.quantity) AS qty, MAX(oi.unit) AS unit
+        FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN suppliers s ON s.id = o.supplier_id
+        GROUP BY oi.product_name, s.supplier_name ORDER BY qty DESC LIMIT 10");
+    $topSuppliers = an_rows($conn, "SELECT s.supplier_name, COUNT(o.id) AS cnt, MAX(o.order_date) AS last_date
+        FROM orders o JOIN suppliers s ON s.id = o.supplier_id GROUP BY s.id, s.supplier_name ORDER BY cnt DESC LIMIT 8");
+    $recentOrders = an_rows($conn, "SELECT o.id, o.order_date, o.total_items, o.status, s.supplier_name
+        FROM orders o JOIN suppliers s ON s.id = o.supplier_id ORDER BY o.order_date DESC, o.id DESC LIMIT 6");
+}
+$maxMonth    = max(array_column($monthly, 'orders') ?: [0]);
+$maxTopQty   = max(array_column($topProducts, 'qty') ?: [0]);
+$maxSupOrder = max(array_column($topSuppliers, 'cnt') ?: [0]);
+
+// Donut geometry (circumference of r=15.915 circle = 100)
+$donut = [
+    ['key' => 'ok',  'label' => 'Healthy',      'cnt' => $okCount,  'color' => '#0ca30c', 'icon' => '✓'],
+    ['key' => 'low', 'label' => 'Low stock',    'cnt' => $lowCount, 'color' => '#fab219', 'icon' => '!'],
+    ['key' => 'out', 'label' => 'Out of stock', 'cnt' => $outCount, 'color' => '#d03b3b', 'icon' => '✕'],
+];
 
 $pageTitle = 'Analytics';
 include __DIR__ . '/partials/header.php';
 ?>
 
-<?php if (!$analyticsReady): ?>
-<section class='card'>
-  <div class='section-head'>
-    <h2>Analytics</h2>
-    <p>Analytics tables not found. Run the migration to enable this feature.</p>
-  </div>
-  <div class='helper-box'>
-    <strong>Setup required:</strong> Import <code>analytics_migration.sql</code> into your database,
-    then refresh this page.
-  </div>
-</section>
-
-<?php else: ?>
-
-<section class='card'>
-  <div class='section-head'>
-    <h2>Analytics</h2>
-    <p>Spending overview &amp; order insights &mdash; <?= date('Y') ?></p>
+<section class='card an-hero'>
+  <div>
+    <h2 class='an-title'>Analytics</h2>
+    <p class='an-subtitle'>Stock health &amp; ordering overview &middot; updated <?= date('j M Y, g:i a') ?></p>
   </div>
   <div class='action-row'>
-    <a class='btn btn-dark' href='admin_orders.php'>Order History</a>
-    <a class='btn btn-outline' href='admin_invoices.php'>Invoices</a>
+    <a class='btn btn-dark' href='reorder.php'>Reorder List</a>
+    <a class='btn btn-outline' href='admin_orders.php'>Order History</a>
   </div>
 </section>
 
-<!-- Summary stat boxes -->
-<div class='stat-grid'>
-  <div class='stat-box stat-accent'>
-    <div class='stat-label'>This Month (Invoices)</div>
-    <div class='stat-value'>$<?= number_format($thisMonthSpend, 2) ?></div>
-    <div class='stat-sub'><?= date('F Y') ?></div>
+<!-- KPI tiles -->
+<div class='an-kpis'>
+  <div class='an-kpi'>
+    <div class='an-kpi-label'>Total Products</div>
+    <div class='an-kpi-value'><?= $totalProducts ?></div>
+    <div class='an-kpi-sub'>across <?= $supplierTotal ?> suppliers</div>
   </div>
-  <div class='stat-box stat-accent'>
-    <div class='stat-label'>This Year (Invoices)</div>
-    <div class='stat-value'>$<?= number_format($totalYearSpend, 2) ?></div>
-    <div class='stat-sub'><?= $totalInvoicesYear ?> invoice<?= $totalInvoicesYear !== 1 ? 's' : '' ?> recorded</div>
+  <div class='an-kpi'>
+    <div class='an-kpi-label'>Stock Health</div>
+    <div class='an-kpi-value'><?= $healthPct ?>%</div>
+    <div class='an-kpi-sub'><?= $okCount ?> products fully stocked</div>
   </div>
-  <div class='stat-box stat-accent'>
-    <div class='stat-label'>Orders This Year</div>
-    <div class='stat-value'><?= $totalOrdersYear ?></div>
-    <div class='stat-sub'>purchase orders sent</div>
+  <div class='an-kpi'>
+    <div class='an-kpi-label'><span class='an-dot' style='background:#fab219'></span>Need Reorder</div>
+    <div class='an-kpi-value'><?= $lowCount + $outCount ?></div>
+    <div class='an-kpi-sub'><?= $poQty ?> units on PO in total</div>
   </div>
-  <div class='stat-box stat-accent'>
-    <div class='stat-label'>Est. Current Reorder</div>
-    <div class='stat-value'>$<?= number_format($totalReorderEst, 2) ?></div>
-    <div class='stat-sub'>based on unit prices</div>
+  <div class='an-kpi'>
+    <div class='an-kpi-label'><span class='an-dot' style='background:#d03b3b'></span>Out of Stock</div>
+    <div class='an-kpi-value'><?= $outCount ?></div>
+    <div class='an-kpi-sub'>SOH is zero</div>
+  </div>
+  <div class='an-kpi'>
+    <div class='an-kpi-label'>Orders This Month</div>
+    <div class='an-kpi-value'><?= $ordersMonth ?></div>
+    <div class='an-kpi-sub'><?= $ordersYear ?> so far in <?= date('Y') ?></div>
+  </div>
+  <div class='an-kpi'>
+    <div class='an-kpi-label'>Last Order</div>
+    <div class='an-kpi-value an-kpi-value-sm'><?= $lastOrder ? esc(date('j M', strtotime($lastOrder))) : '—' ?></div>
+    <div class='an-kpi-sub'><?= $lastOrder ? esc(floor((time() - strtotime($lastOrder)) / 86400)) . ' days ago' : 'no orders yet' ?></div>
   </div>
 </div>
 
-<!-- Monthly overview table -->
-<section class='card'>
-  <div class='section-head'>
-    <h2>Monthly Overview</h2>
-    <p>Last 12 months &mdash; orders placed and invoices received</p>
-  </div>
-
-  <?php if (empty($monthlyData)): ?>
-    <div class='helper-box'>No monthly data yet. Start placing orders and recording invoices.</div>
-  <?php else: ?>
-  <div class='table-wrap' style='display:block'>
-    <table class='table'>
-      <thead>
-        <tr>
-          <th>Month</th>
-          <th>Orders</th>
-          <th>Items Ordered</th>
-          <th>Invoices</th>
-          <th>Invoice Amount</th>
-          <th>Spend Bar</th>
-        </tr>
-      </thead>
-      <tbody>
-        <?php foreach ($monthlyData as $ym => $d): ?>
-        <tr>
-          <td><span class='month-badge'><?= esc($d['lbl']) ?></span></td>
-          <td><?= (int)$d['order_count'] ?></td>
-          <td><?= (int)$d['total_items'] ?></td>
-          <td><?= (int)$d['invoice_count'] ?></td>
-          <td><strong>$<?= number_format((float)$d['invoice_amount'], 2) ?></strong></td>
-          <td style='min-width:120px'>
-            <div class='bar-wrap'>
-              <div class='bar-fill' style='width:<?= $maxInvAmt > 0 ? round((float)$d['invoice_amount'] / $maxInvAmt * 100) : 0 ?>%'></div>
-            </div>
-          </td>
-        </tr>
+<div class='an-grid'>
+  <!-- Stock health donut -->
+  <section class='card an-card'>
+    <div class='section-head'>
+      <h2>Stock Health</h2>
+      <p>Every product grouped by its current stock level</p>
+    </div>
+    <?php if ($totalProducts === 0): ?>
+      <div class='helper-box'>No products yet.</div>
+    <?php else: ?>
+    <div class='an-donut-wrap'>
+      <svg viewBox='0 0 42 42' class='an-donut' role='img' aria-label='Stock health: <?= $okCount ?> healthy, <?= $lowCount ?> low, <?= $outCount ?> out of stock'>
+        <circle cx='21' cy='21' r='15.915' fill='none' stroke='#edf2f8' stroke-width='6'></circle>
+        <?php $offset = 25; foreach ($donut as $seg): $len = $totalProducts ? $seg['cnt'] / $totalProducts * 100 : 0; if ($len <= 0) continue; $gap = $len >= 100 ? 0 : 0.8; ?>
+          <circle class='an-tip' data-tip='<?= esc($seg['label']) ?>: <?= $seg['cnt'] ?> (<?= an_pct($seg['cnt'], $totalProducts) ?>%)'
+            cx='21' cy='21' r='15.915' fill='none' stroke='<?= $seg['color'] ?>' stroke-width='6'
+            stroke-dasharray='<?= max($len - $gap, 0.1) ?> <?= 100 - max($len - $gap, 0.1) ?>' stroke-dashoffset='<?= $offset ?>'></circle>
+        <?php $offset -= $len; endforeach; ?>
+        <text x='21' y='20.5' text-anchor='middle' class='an-donut-num'><?= $healthPct ?>%</text>
+        <text x='21' y='26' text-anchor='middle' class='an-donut-lbl'>healthy</text>
+      </svg>
+      <div class='an-legend'>
+        <?php foreach ($donut as $seg): ?>
+          <div class='an-legend-row'>
+            <span class='an-badge' style='background:<?= $seg['color'] ?>;color:<?= $seg['key'] === 'low' ? '#0b0b0b' : '#fff' ?>'><?= $seg['icon'] ?></span>
+            <span class='an-legend-name'><?= esc($seg['label']) ?></span>
+            <strong><?= $seg['cnt'] ?></strong>
+            <span class='an-muted'><?= an_pct($seg['cnt'], $totalProducts) ?>%</span>
+          </div>
         <?php endforeach; ?>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Mobile cards for monthly data -->
-  <div class='mobile-cards'>
-    <?php foreach ($monthlyData as $ym => $d): ?>
-    <div class='data-card' style='background:#f7f9fc;border-radius:16px;padding:14px'>
-      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px'>
-        <span class='month-badge'><?= esc($d['lbl']) ?></span>
-        <strong>$<?= number_format((float)$d['invoice_amount'], 2) ?></strong>
-      </div>
-      <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;text-align:center'>
-        <div><div style='color:#888;font-size:10px'>Orders</div><strong><?= (int)$d['order_count'] ?></strong></div>
-        <div><div style='color:#888;font-size:10px'>Items</div><strong><?= (int)$d['total_items'] ?></strong></div>
-        <div><div style='color:#888;font-size:10px'>Invoices</div><strong><?= (int)$d['invoice_count'] ?></strong></div>
-      </div>
-      <div class='bar-wrap' style='margin-top:10px'>
-        <div class='bar-fill' style='width:<?= $maxInvAmt > 0 ? round((float)$d['invoice_amount'] / $maxInvAmt * 100) : 0 ?>%'></div>
       </div>
     </div>
-    <?php endforeach; ?>
-  </div>
-  <?php endif; ?>
-</section>
+    <?php endif; ?>
+  </section>
 
-<!-- Supplier spending this year -->
-<section class='card'>
-  <div class='section-head'>
-    <h2>Spending by Supplier</h2>
-    <p>Invoice totals per supplier &mdash; <?= date('Y') ?></p>
-  </div>
-
-  <?php if (empty($supplierRows)): ?>
-    <div class='helper-box'>No invoices recorded yet. Add invoices via the Invoices page.</div>
-  <?php else: ?>
-    <?php foreach ($supplierRows as $sr): ?>
-    <div class='bar-row'>
-      <div class='bar-label'><?= esc($sr['supplier_name']) ?></div>
-      <div class='bar-wrap'>
-        <div class='bar-fill' style='width:<?= $maxSupplierAmt > 0 ? round((float)$sr['total'] / $maxSupplierAmt * 100) : 0 ?>%'></div>
-      </div>
-      <div class='bar-val'>$<?= number_format((float)$sr['total'], 0) ?></div>
+  <!-- Orders trend -->
+  <section class='card an-card'>
+    <div class='section-head'>
+      <h2>Orders per Month</h2>
+      <p>Purchase orders sent in the last 12 months</p>
     </div>
-    <?php endforeach; ?>
-  <?php endif; ?>
-</section>
-
-<!-- Top ordered products -->
-<section class='card'>
-  <div class='section-head'>
-    <h2>Top Ordered Products</h2>
-    <p>All time &mdash; by total quantity ordered</p>
-  </div>
-
-  <?php if (empty($topRows)): ?>
-    <div class='helper-box'>No order history yet. Products will appear here once orders are placed.</div>
-  <?php else: ?>
-  <div class='table-wrap' style='display:block'>
-    <table class='table'>
-      <thead>
-        <tr><th>#</th><th>Product</th><th>Supplier</th><th>Times Ordered</th><th>Total Qty</th><th>Qty Bar</th></tr>
-      </thead>
-      <tbody>
-        <?php foreach ($topRows as $i => $p): ?>
-        <tr>
-          <td><?= $i + 1 ?></td>
-          <td><?= esc($p['product_name']) ?></td>
-          <td><?= esc($p['supplier_name']) ?></td>
-          <td><?= (int)$p['order_count'] ?></td>
-          <td><strong><?= (int)$p['total_qty'] ?></strong></td>
-          <td style='min-width:100px'>
-            <div class='bar-wrap'>
-              <div class='bar-fill' style='width:<?= $maxQty > 0 ? round((int)$p['total_qty'] / $maxQty * 100) : 0 ?>%'></div>
-            </div>
-          </td>
-        </tr>
-        <?php endforeach; ?>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Mobile -->
-  <div class='mobile-cards'>
-    <?php foreach ($topRows as $i => $p): ?>
-    <div class='data-card' style='background:#f7f9fc;border-radius:14px;padding:12px;display:flex;align-items:center;gap:12px'>
-      <div style='width:28px;height:28px;border-radius:50%;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0'><?= $i+1 ?></div>
-      <div style='flex:1;min-width:0'>
-        <div style='font-size:12px;font-weight:800'><?= esc($p['product_name']) ?></div>
-        <div style='font-size:10px;color:#888'><?= esc($p['supplier_name']) ?></div>
-        <div class='bar-wrap' style='margin-top:5px'>
-          <div class='bar-fill' style='width:<?= $maxQty > 0 ? round((int)$p['total_qty'] / $maxQty * 100) : 0 ?>%'></div>
+    <?php if (!$ordersOn || $maxMonth === 0): ?>
+      <div class='helper-box'>No orders yet. Orders appear here once a PO is downloaded.</div>
+    <?php else: ?>
+    <div class='an-cols'>
+      <?php foreach ($monthly as $ym => $m): ?>
+        <div class='an-col an-tip' data-tip='<?= esc($m['full']) ?>: <?= $m['orders'] ?> orders, <?= $m['items'] ?> items'>
+          <div class='an-col-val'><?= $m['orders'] > 0 && $m['orders'] === $maxMonth ? $m['orders'] : '' ?></div>
+          <div class='an-col-track'>
+            <div class='an-col-bar <?= $ym === date('Y-m') ? 'an-col-now' : '' ?>' style='height:<?= an_pct($m['orders'], $maxMonth) ?>%'></div>
+          </div>
+          <div class='an-col-lbl'><?= esc($m['lbl']) ?></div>
         </div>
-      </div>
-      <div style='text-align:right;flex-shrink:0'>
-        <div style='font-size:16px;font-weight:800'><?= (int)$p['total_qty'] ?></div>
-        <div style='font-size:10px;color:#888'><?= (int)$p['order_count'] ?> orders</div>
-      </div>
+      <?php endforeach; ?>
     </div>
-    <?php endforeach; ?>
-  </div>
-  <?php endif; ?>
-</section>
+    <?php endif; ?>
+  </section>
+</div>
 
-<!-- Current reorder needs -->
+<!-- Supplier health -->
 <section class='card'>
   <div class='section-head'>
-    <h2>Current Reorder Needs</h2>
-    <p>Products with PO &gt; 0 &mdash; sorted by estimated cost</p>
+    <h2>Supplier Stock Status</h2>
+    <p>Suppliers with the most items needing attention are listed first</p>
   </div>
-  <div class='action-row' style='margin-bottom:14px'>
-    <div class='pill'>Est. Total: $<?= number_format($totalReorderEst, 2) ?></div>
-    <a class='btn btn-outline' href='reorder.php'>View Reorder List</a>
+  <div class='an-legend an-legend-inline'>
+    <?php foreach ($donut as $seg): ?>
+      <span class='an-legend-row'><span class='an-badge' style='background:<?= $seg['color'] ?>;color:<?= $seg['key'] === 'low' ? '#0b0b0b' : '#fff' ?>'><?= $seg['icon'] ?></span><?= esc($seg['label']) ?></span>
+    <?php endforeach; ?>
   </div>
-
-  <?php if (empty($reorderRows)): ?>
-    <div class='helper-box'>No products currently need reordering.</div>
-  <?php else: ?>
-  <div class='table-wrap' style='display:block'>
-    <table class='table'>
-      <thead>
-        <tr><th>Supplier</th><th>Product</th><th>Unit</th><th>PO</th><th>SOH</th><th>MOS</th><th>Unit Price</th><th>Est. Cost</th></tr>
-      </thead>
-      <tbody>
-        <?php foreach ($reorderRows as $r): ?>
-        <tr>
-          <td><?= esc($r['supplier_name']) ?></td>
-          <td><?= esc($r['product_name']) ?></td>
-          <td><?= esc($r['unit']) ?></td>
-          <td><strong><?= (int)$r['op'] ?></strong></td>
-          <td><?= (int)$r['soh'] ?></td>
-          <td><?= (int)$r['csoh'] ?></td>
-          <td><?= (float)$r['unit_price'] > 0 ? '$' . number_format((float)$r['unit_price'], 2) : '<span style="color:#bbb">—</span>' ?></td>
-          <td><?= (float)$r['est_cost'] > 0 ? '<strong>$' . number_format((float)$r['est_cost'], 2) . '</strong>' : '<span style="color:#bbb">—</span>' ?></td>
-        </tr>
-        <?php endforeach; ?>
-      </tbody>
-      <tfoot>
-        <tr>
-          <th colspan='7' style='text-align:right'>Estimated Total</th>
-          <th>$<?= number_format($totalReorderEst, 2) ?></th>
-        </tr>
-      </tfoot>
-    </table>
-  </div>
-
-  <!-- Mobile reorder cards -->
-  <div class='mobile-cards'>
-    <?php foreach ($reorderRows as $r): ?>
-    <div class='data-card' style='background:#f7f9fc;border-radius:14px;padding:12px'>
-      <div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px'>
-        <div>
-          <div style='font-size:12px;font-weight:800'><?= esc($r['product_name']) ?></div>
-          <div style='font-size:10px;color:#888'><?= esc($r['supplier_name']) ?></div>
+  <div class='an-suppliers'>
+    <?php foreach ($supplierRows as $s): $t = (int)$s['total']; ?>
+      <a class='an-supplier' href='products.php?supplier_id=<?= (int)$s['id'] ?>'>
+        <div class='an-supplier-head'>
+          <strong><?= esc($s['supplier_name']) ?></strong>
+          <span class='an-muted'><?= $t ?> product<?= $t === 1 ? '' : 's' ?></span>
         </div>
-        <?php if ((float)$r['est_cost'] > 0): ?>
-          <span class='pill' style='font-size:11px'>$<?= number_format((float)$r['est_cost'], 2) ?></span>
+        <?php if ($t === 0): ?>
+          <div class='an-stack'><div class='an-stack-empty'></div></div>
+        <?php else: ?>
+          <div class='an-stack'>
+            <?php foreach ($donut as $seg): $c = (int)$s[$seg['key'] . '_cnt']; if ($c === 0) continue; ?>
+              <div class='an-tip' data-tip='<?= esc($seg['label']) ?>: <?= $c ?>' style='flex:<?= $c ?>;background:<?= $seg['color'] ?>'></div>
+            <?php endforeach; ?>
+          </div>
         <?php endif; ?>
-      </div>
-      <div style='display:grid;grid-template-columns:repeat(4,1fr);gap:5px;font-size:11px;text-align:center'>
-        <div><div style='color:#888;font-size:9px'>PO</div><strong><?= (int)$r['op'] ?></strong></div>
-        <div><div style='color:#888;font-size:9px'>SOH</div><?= (int)$r['soh'] ?></div>
-        <div><div style='color:#888;font-size:9px'>MOS</div><?= (int)$r['csoh'] ?></div>
-        <div><div style='color:#888;font-size:9px'>Price</div><?= (float)$r['unit_price'] > 0 ? '$'.number_format((float)$r['unit_price'],2) : '—' ?></div>
-      </div>
-    </div>
+        <div class='an-supplier-foot'>
+          <span><?= (int)$s['out_cnt'] ?> out</span>
+          <span><?= (int)$s['low_cnt'] ?> low</span>
+          <span><?= (int)$s['ok_cnt'] ?> healthy</span>
+          <span class='an-po'>PO <?= (int)$s['po_qty'] ?></span>
+        </div>
+      </a>
     <?php endforeach; ?>
+  </div>
+</section>
+
+<!-- Needs attention -->
+<section class='card'>
+  <div class='section-head'>
+    <h2>Needs Attention</h2>
+    <p>Out of stock and low stock products, most urgent first</p>
+  </div>
+  <?php if (empty($attentionRows)): ?>
+    <div class='helper-box'>Everything is stocked above MOS. Nice work!</div>
+  <?php else: ?>
+  <div class='an-filters'>
+    <input type='text' id='anSearch' placeholder='Search product'>
+    <select id='anSupplier'>
+      <option value=''>All suppliers</option>
+      <?php foreach ($supplierRows as $s): if ((int)$s['out_cnt'] + (int)$s['low_cnt'] === 0) continue; ?>
+        <option value='<?= esc($s['supplier_name']) ?>'><?= esc($s['supplier_name']) ?></option>
+      <?php endforeach; ?>
+    </select>
+    <select id='anStatus'>
+      <option value=''>All statuses</option>
+      <option value='out'>Out of stock</option>
+      <option value='low'>Low stock</option>
+    </select>
+  </div>
+  <div class='an-attn' id='anAttn'>
+    <?php foreach ($attentionRows as $r):
+      $soh = (int)$r['soh']; $mos = (int)$r['csoh'];
+      $isOut = $soh === 0;
+      $cov = $mos > 0 ? min(an_pct($soh, $mos), 100) : ($soh > 0 ? 100 : 0); ?>
+      <div class='an-attn-row' data-name='<?= esc(strtolower($r['product_name'])) ?>' data-supplier='<?= esc($r['supplier_name']) ?>' data-status='<?= $isOut ? 'out' : 'low' ?>'>
+        <span class='an-badge' style='background:<?= $isOut ? '#d03b3b' : '#fab219' ?>;color:<?= $isOut ? '#fff' : '#0b0b0b' ?>' title='<?= $isOut ? 'Out of stock' : 'Low stock' ?>'><?= $isOut ? '✕' : '!' ?></span>
+        <div class='an-attn-main'>
+          <div class='an-attn-name'><?= esc($r['product_name']) ?></div>
+          <div class='an-muted'><?= esc($r['supplier_name']) ?> &middot; <?= $isOut ? 'Out of stock' : 'Low stock' ?></div>
+          <div class='bar-wrap an-tip' data-tip='SOH <?= $soh ?> of MOS <?= $mos ?> (<?= $cov ?>%)' style='margin-top:6px;height:8px'>
+            <div class='bar-fill' style='width:<?= $cov ?>%;background:<?= $isOut ? '#d03b3b' : '#fab219' ?>'></div>
+          </div>
+        </div>
+        <div class='an-attn-nums'>
+          <div><span>SOH</span><strong><?= $soh ?></strong></div>
+          <div><span>MOS</span><strong><?= $mos ?></strong></div>
+          <div><span>PO</span><strong><?= (int)$r['op'] ?> <small><?= esc($r['unit']) ?></small></strong></div>
+        </div>
+      </div>
+    <?php endforeach; ?>
+    <div class='helper-box' id='anNoMatch' style='display:none'>No products match your filter.</div>
   </div>
   <?php endif; ?>
 </section>
 
-<?php endif; ?>
+<div class='an-grid'>
+  <!-- Top ordered products -->
+  <section class='card an-card'>
+    <div class='section-head'>
+      <h2>Most Ordered Products</h2>
+      <p>All time, by total quantity ordered</p>
+    </div>
+    <?php if (empty($topProducts)): ?>
+      <div class='helper-box'>No order history yet.</div>
+    <?php else: ?>
+      <?php foreach ($topProducts as $i => $p): ?>
+        <div class='an-rank an-tip' data-tip='Ordered <?= (int)$p['times'] ?> times, <?= (int)$p['qty'] ?> <?= esc($p['unit']) ?> total'>
+          <div class='an-rank-num'><?= $i + 1 ?></div>
+          <div class='an-rank-main'>
+            <div class='an-rank-name'><?= esc($p['product_name']) ?> <span class='an-muted'>&middot; <?= esc($p['supplier_name']) ?></span></div>
+            <div class='bar-wrap' style='height:8px'><div class='bar-fill' style='width:<?= an_pct((int)$p['qty'], $maxTopQty) ?>%'></div></div>
+          </div>
+          <div class='an-rank-val'><?= (int)$p['qty'] ?> <small><?= esc($p['unit']) ?></small></div>
+        </div>
+      <?php endforeach; ?>
+    <?php endif; ?>
+  </section>
+
+  <!-- Orders by supplier -->
+  <section class='card an-card'>
+    <div class='section-head'>
+      <h2>Orders by Supplier</h2>
+      <p>All time, number of purchase orders</p>
+    </div>
+    <?php if (empty($topSuppliers)): ?>
+      <div class='helper-box'>No order history yet.</div>
+    <?php else: ?>
+      <?php foreach ($topSuppliers as $s): ?>
+        <div class='bar-row an-tip' data-tip='Last order <?= esc(date('j M Y', strtotime($s['last_date']))) ?>'>
+          <div class='bar-label'><?= esc($s['supplier_name']) ?></div>
+          <div class='bar-wrap'><div class='bar-fill' style='width:<?= an_pct((int)$s['cnt'], $maxSupOrder) ?>%'></div></div>
+          <div class='bar-val'><?= (int)$s['cnt'] ?></div>
+        </div>
+      <?php endforeach; ?>
+    <?php endif; ?>
+  </section>
+</div>
+
+<div class='an-grid'>
+  <!-- Recent orders -->
+  <section class='card an-card'>
+    <div class='section-head'>
+      <h2>Recent Orders</h2>
+      <p>Latest purchase orders sent</p>
+    </div>
+    <?php if (empty($recentOrders)): ?>
+      <div class='helper-box'>No orders yet.</div>
+    <?php else: ?>
+      <?php foreach ($recentOrders as $o): ?>
+        <div class='an-order'>
+          <span class='month-badge'><?= esc(date('j M', strtotime($o['order_date']))) ?></span>
+          <div class='an-order-main'><strong><?= esc($o['supplier_name']) ?></strong><div class='an-muted'><?= (int)$o['total_items'] ?> items</div></div>
+          <span class='an-status an-status-<?= esc($o['status']) ?>'><?= esc(ucfirst($o['status'])) ?></span>
+        </div>
+      <?php endforeach; ?>
+      <div class='action-row' style='margin-top:12px'><a class='btn btn-outline btn-small' href='admin_orders.php'>View all orders</a></div>
+    <?php endif; ?>
+  </section>
+
+  <!-- Products by unit -->
+  <section class='card an-card'>
+    <div class='section-head'>
+      <h2>Products by Unit</h2>
+      <p>How your products are measured</p>
+    </div>
+    <?php if (empty($unitRows)): ?>
+      <div class='helper-box'>No products yet.</div>
+    <?php else: ?>
+      <?php foreach ($unitRows as $u): ?>
+        <div class='bar-row'>
+          <div class='bar-label'><?= esc($u['unit']) ?></div>
+          <div class='bar-wrap'><div class='bar-fill' style='width:<?= an_pct((int)$u['cnt'], $maxUnit) ?>%'></div></div>
+          <div class='bar-val'><?= (int)$u['cnt'] ?></div>
+        </div>
+      <?php endforeach; ?>
+    <?php endif; ?>
+  </section>
+</div>
+
+<div class='an-tooltip' id='anTooltip'></div>
+
+<script>
+(function () {
+  const tip = document.getElementById('anTooltip');
+  function show(e) {
+    const el = e.target.closest('.an-tip');
+    if (!el) return;
+    tip.textContent = el.getAttribute('data-tip');
+    tip.style.display = 'block';
+    const p = e.touches ? e.touches[0] : e;
+    const x = Math.min(p.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+    tip.style.left = Math.max(x, 8) + 'px';
+    tip.style.top = (p.clientY - tip.offsetHeight - 12) + 'px';
+  }
+  document.addEventListener('mousemove', function (e) { e.target.closest('.an-tip') ? show(e) : (tip.style.display = 'none'); });
+  document.addEventListener('touchstart', function (e) { e.target.closest('.an-tip') ? show(e) : (tip.style.display = 'none'); }, { passive: true });
+
+  const search = document.getElementById('anSearch');
+  const sup = document.getElementById('anSupplier');
+  const status = document.getElementById('anStatus');
+  if (!search) return;
+  function filter() {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#anAttn .an-attn-row').forEach(function (row) {
+      const ok = (!q || row.dataset.name.includes(q))
+        && (!sup.value || row.dataset.supplier === sup.value)
+        && (!status.value || row.dataset.status === status.value);
+      row.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+    });
+    document.getElementById('anNoMatch').style.display = shown ? 'none' : 'block';
+  }
+  [search, sup, status].forEach(function (el) { el.addEventListener('input', filter); });
+})();
+</script>
 
 <?php include __DIR__ . '/partials/footer.php'; ?>

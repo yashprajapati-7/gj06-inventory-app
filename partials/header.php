@@ -63,7 +63,6 @@
       <a href='users.php' onclick='closeMenu()'>Users</a>
       <a href='admin_analytics.php' onclick='closeMenu()'>Analytics</a>
       <a href='admin_orders.php' onclick='closeMenu()'>Order History</a>
-      <a href='admin_invoices.php' onclick='closeMenu()'>Invoices</a>
     <?php endif; ?>
     <a href='logout.php' onclick='closeMenu()'>Logout</a>
   </nav>

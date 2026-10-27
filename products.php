@@ -69,7 +69,24 @@ if (isset($_POST['update_soh'])) {
 }
 
 $unitError = '';
-if ((isset($_POST['add_unit']) || isset($_POST['edit_unit'])) && !is_admin()) die('Access denied');
+if ((isset($_POST['add_unit']) || isset($_POST['edit_unit']) || isset($_POST['delete_unit'])) && !is_admin()) die('Access denied');
+
+if (isset($_POST['delete_unit']) && is_admin()) {
+    $delUnit = trim($_POST['old_unit'] ?? '');
+    $stmt = $conn->prepare('SELECT COUNT(*) AS total FROM products WHERE unit=?');
+    $stmt->bind_param('s', $delUnit);
+    $stmt->execute();
+    $inUse = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+    if ($inUse > 0) {
+        $unitError = "Cannot delete '{$delUnit}': {$inUse} product(s) still use it. Change those products first.";
+    } else {
+        $stmt = $conn->prepare('DELETE FROM units WHERE unit_name=?');
+        $stmt->bind_param('s', $delUnit);
+        $stmt->execute();
+        header('Location: products.php?supplier_id=' . $supplierId . '&msg=unit_deleted');
+        exit;
+    }
+}
 
 if (isset($_POST['add_unit']) && is_admin()) {
     $newUnit = strtolower(trim($_POST['unit_name'] ?? ''));
@@ -185,6 +202,7 @@ if (isset($_GET['msg'])) {
     if ($_GET['msg'] === 'soh_updated') $message = 'SOH updated.';
     if ($_GET['msg'] === 'unit_added') $message = 'Unit added.';
     if ($_GET['msg'] === 'unit_updated') $message = 'Unit updated.';
+    if ($_GET['msg'] === 'unit_deleted') $message = 'Unit deleted.';
 }
 
 $supplierOptions = get_user_suppliers($conn, $userId, $role);
@@ -200,7 +218,7 @@ if ($search !== '') {
     $types .= 's';
     $like = '%' . $search . '%';
 }
-$productQuery .= ' ORDER BY p.id DESC';
+$productQuery .= ' ORDER BY p.product_name ASC';
 
 $stmt = $conn->prepare($productQuery);
 if ($unitFilter !== '' && $search !== '') {
@@ -331,8 +349,9 @@ include __DIR__ . '/partials/header.php';
   <?php foreach ($allowedUnits as $u): ?>
     <form method='post' style='display:flex;gap:8px;margin-top:8px;'>
       <input type='hidden' name='old_unit' value='<?= esc($u) ?>'>
-      <input type='text' name='unit_name' value='<?= esc($u) ?>' maxlength='20' required style='flex:1;'>
+      <input type='text' name='unit_name' value='<?= esc($u) ?>' maxlength='20' required style='flex:1;min-width:0;'>
       <button class='btn btn-outline' name='edit_unit'>Save</button>
+      <button class='btn btn-danger' name='delete_unit' formnovalidate onclick="return confirm('Delete unit &quot;<?= esc($u) ?>&quot;?')">Delete</button>
     </form>
   <?php endforeach; ?>
 </div>
