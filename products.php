@@ -68,14 +68,15 @@ if (isset($_POST['update_soh'])) {
     }
 }
 
-if ((isset($_POST['add_unit']) || isset($_GET['delete_unit'])) && !is_admin()) die('Access denied');
+$unitError = '';
+if ((isset($_POST['add_unit']) || isset($_POST['edit_unit'])) && !is_admin()) die('Access denied');
 
 if (isset($_POST['add_unit']) && is_admin()) {
     $newUnit = strtolower(trim($_POST['unit_name'] ?? ''));
     if ($newUnit === '' || strlen($newUnit) > 20) {
-        $error = 'Unit name is required (max 20 characters).';
+        $unitError = 'Unit name is required (max 20 characters).';
     } elseif (in_array($newUnit, $allowedUnits, true)) {
-        $error = 'That unit already exists.';
+        $unitError = 'That unit already exists.';
     } else {
         $stmt = $conn->prepare('INSERT INTO units(unit_name) VALUES(?)');
         $stmt->bind_param('s', $newUnit);
@@ -83,23 +84,27 @@ if (isset($_POST['add_unit']) && is_admin()) {
             header('Location: products.php?supplier_id=' . $supplierId . '&msg=unit_added');
             exit;
         }
-        $error = 'Could not add unit.';
+        $unitError = 'Could not add unit.';
     }
 }
 
-if (isset($_GET['delete_unit']) && is_admin()) {
-    $delUnit = trim($_GET['delete_unit']);
-    $stmt = $conn->prepare('SELECT COUNT(*) AS total FROM products WHERE unit=?');
-    $stmt->bind_param('s', $delUnit);
-    $stmt->execute();
-    $inUse = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
-    if ($inUse > 0) {
-        $error = "Cannot delete unit '{$delUnit}' — {$inUse} product(s) use it.";
+if (isset($_POST['edit_unit']) && is_admin()) {
+    $oldUnit = trim($_POST['old_unit'] ?? '');
+    $newUnit = strtolower(trim($_POST['unit_name'] ?? ''));
+    if (!in_array($oldUnit, $allowedUnits, true)) {
+        $unitError = 'Unit not found.';
+    } elseif ($newUnit === '' || strlen($newUnit) > 20) {
+        $unitError = 'Unit name is required (max 20 characters).';
+    } elseif ($newUnit !== $oldUnit && in_array($newUnit, $allowedUnits, true)) {
+        $unitError = 'That unit already exists.';
     } else {
-        $stmt = $conn->prepare('DELETE FROM units WHERE unit_name=?');
-        $stmt->bind_param('s', $delUnit);
+        $stmt = $conn->prepare('UPDATE units SET unit_name=? WHERE unit_name=?');
+        $stmt->bind_param('ss', $newUnit, $oldUnit);
         $stmt->execute();
-        header('Location: products.php?supplier_id=' . $supplierId . '&msg=unit_deleted');
+        $stmt = $conn->prepare('UPDATE products SET unit=? WHERE unit=?');
+        $stmt->bind_param('ss', $newUnit, $oldUnit);
+        $stmt->execute();
+        header('Location: products.php?supplier_id=' . $supplierId . '&msg=unit_updated');
         exit;
     }
 }
@@ -179,7 +184,7 @@ if (isset($_GET['msg'])) {
     if ($_GET['msg'] === 'deleted') $message = 'Product deleted.';
     if ($_GET['msg'] === 'soh_updated') $message = 'SOH updated.';
     if ($_GET['msg'] === 'unit_added') $message = 'Unit added.';
-    if ($_GET['msg'] === 'unit_deleted') $message = 'Unit deleted.';
+    if ($_GET['msg'] === 'unit_updated') $message = 'Unit updated.';
 }
 
 $supplierOptions = get_user_suppliers($conn, $userId, $role);
@@ -226,7 +231,7 @@ include __DIR__ . '/partials/header.php';
 
   <div class='action-row'>
     <button type='button' class='btn btn-dark' onclick='openProductModal()'>Add Product</button>
-    <button type='button' class='btn btn-outline' onclick='openUnitModal()'>Add Unit</button>
+    <button type='button' class='btn btn-dark' onclick='openUnitModal()'>Add / Edit Unit</button>
     <?php if ($editProduct): ?>
       <a class='btn btn-outline' href='products.php?supplier_id=<?= (int)$supplierId ?>'>Cancel Edit</a>
     <?php endif; ?>
@@ -302,34 +307,34 @@ include __DIR__ . '/partials/header.php';
   </form>
 </div>
 
-<div class='modal-overlay' id='unitModalOverlay' onclick='closeUnitModal()'></div>
+<div class='modal-overlay <?= $unitError ? 'show' : '' ?>' id='unitModalOverlay' onclick='closeUnitModal()'></div>
 
-<div class='modal-box' id='unitModal'>
+<div class='modal-box <?= $unitError ? 'show' : '' ?>' id='unitModal' style='max-height:85vh;overflow-y:auto;'>
   <div class='modal-head'>
-    <h2>Add Unit</h2>
+    <h2>Add / Edit Unit</h2>
     <button type='button' class='modal-close' onclick='closeUnitModal()'>✕</button>
   </div>
 
+  <?php if ($unitError): ?><div class='alert-box' style='margin-bottom:12px;'><?= esc($unitError) ?></div><?php endif; ?>
+
   <form method='post' class='form-grid'>
     <div class='full'>
-      <label class='field-label'>Unit Name</label>
+      <label class='field-label'>New Unit</label>
       <input type='text' name='unit_name' maxlength='20' placeholder='Example: box, ltr, dozen' required>
     </div>
     <div class='full action-row'>
-      <button class='btn btn-dark' name='add_unit'>Save Unit</button>
+      <button class='btn btn-dark' name='add_unit'>Add Unit</button>
     </div>
   </form>
 
-  <div class='helper-box' style='margin-top:12px;'>
-    <strong>Existing units:</strong>
-    <div class='action-row' style='margin-top:8px;'>
-      <?php foreach ($allowedUnits as $u): ?>
-        <span class='pill'><?= esc($u) ?>
-          <a href='products.php?supplier_id=<?= (int)$supplierId ?>&delete_unit=<?= urlencode($u) ?>' onclick="return confirm('Delete this unit?')" style='margin-left:6px;color:#c00;text-decoration:none;'>✕</a>
-        </span>
-      <?php endforeach; ?>
-    </div>
-  </div>
+  <label class='field-label' style='display:block;margin-top:18px;'>Edit Existing Units</label>
+  <?php foreach ($allowedUnits as $u): ?>
+    <form method='post' style='display:flex;gap:8px;margin-top:8px;'>
+      <input type='hidden' name='old_unit' value='<?= esc($u) ?>'>
+      <input type='text' name='unit_name' value='<?= esc($u) ?>' maxlength='20' required style='flex:1;'>
+      <button class='btn btn-outline' name='edit_unit'>Save</button>
+    </form>
+  <?php endforeach; ?>
 </div>
 <?php endif; ?>
 
