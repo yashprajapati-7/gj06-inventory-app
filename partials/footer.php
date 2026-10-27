@@ -36,6 +36,20 @@ function closeProductModal() {
   if (overlay) overlay.classList.remove('show');
 }
 
+function openUnitModal() {
+  const modal = document.getElementById('unitModal');
+  const overlay = document.getElementById('unitModalOverlay');
+  if (modal) modal.classList.add('show');
+  if (overlay) overlay.classList.add('show');
+}
+
+function closeUnitModal() {
+  const modal = document.getElementById('unitModal');
+  const overlay = document.getElementById('unitModalOverlay');
+  if (modal) modal.classList.remove('show');
+  if (overlay) overlay.classList.remove('show');
+}
+
 function updateDateTime() {
   const el = document.getElementById('liveDateTime');
   if (!el) return;

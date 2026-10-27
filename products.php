@@ -2,7 +2,11 @@
 require_once __DIR__ . '/functions.php';
 require_login();
 
-$allowedUnits = ['ctn', 'kg', 'pcs'];
+$allowedUnits = [];
+$unitRes = $conn->query('SELECT unit_name FROM units ORDER BY unit_name ASC');
+while ($unitRes && ($unitRow = $unitRes->fetch_assoc())) {
+    $allowedUnits[] = $unitRow['unit_name'];
+}
 $userId = (int)$_SESSION['user_id'];
 $role = $_SESSION['role'];
 $supplierId = isset($_GET['supplier_id']) ? (int)$_GET['supplier_id'] : 0;
@@ -61,6 +65,42 @@ if (isset($_POST['update_soh'])) {
         } else {
             $error = 'SOH update failed.';
         }
+    }
+}
+
+if ((isset($_POST['add_unit']) || isset($_GET['delete_unit'])) && !is_admin()) die('Access denied');
+
+if (isset($_POST['add_unit']) && is_admin()) {
+    $newUnit = strtolower(trim($_POST['unit_name'] ?? ''));
+    if ($newUnit === '' || strlen($newUnit) > 20) {
+        $error = 'Unit name is required (max 20 characters).';
+    } elseif (in_array($newUnit, $allowedUnits, true)) {
+        $error = 'That unit already exists.';
+    } else {
+        $stmt = $conn->prepare('INSERT INTO units(unit_name) VALUES(?)');
+        $stmt->bind_param('s', $newUnit);
+        if ($stmt->execute()) {
+            header('Location: products.php?supplier_id=' . $supplierId . '&msg=unit_added');
+            exit;
+        }
+        $error = 'Could not add unit.';
+    }
+}
+
+if (isset($_GET['delete_unit']) && is_admin()) {
+    $delUnit = trim($_GET['delete_unit']);
+    $stmt = $conn->prepare('SELECT COUNT(*) AS total FROM products WHERE unit=?');
+    $stmt->bind_param('s', $delUnit);
+    $stmt->execute();
+    $inUse = (int)($stmt->get_result()->fetch_assoc()['total'] ?? 0);
+    if ($inUse > 0) {
+        $error = "Cannot delete unit '{$delUnit}' — {$inUse} product(s) use it.";
+    } else {
+        $stmt = $conn->prepare('DELETE FROM units WHERE unit_name=?');
+        $stmt->bind_param('s', $delUnit);
+        $stmt->execute();
+        header('Location: products.php?supplier_id=' . $supplierId . '&msg=unit_deleted');
+        exit;
     }
 }
 
@@ -138,6 +178,8 @@ if (isset($_GET['msg'])) {
     if ($_GET['msg'] === 'saved') $message = 'Product saved.';
     if ($_GET['msg'] === 'deleted') $message = 'Product deleted.';
     if ($_GET['msg'] === 'soh_updated') $message = 'SOH updated.';
+    if ($_GET['msg'] === 'unit_added') $message = 'Unit added.';
+    if ($_GET['msg'] === 'unit_deleted') $message = 'Unit deleted.';
 }
 
 $supplierOptions = get_user_suppliers($conn, $userId, $role);
@@ -184,6 +226,7 @@ include __DIR__ . '/partials/header.php';
 
   <div class='action-row'>
     <button type='button' class='btn btn-dark' onclick='openProductModal()'>Add Product</button>
+    <button type='button' class='btn btn-outline' onclick='openUnitModal()'>Add Unit</button>
     <?php if ($editProduct): ?>
       <a class='btn btn-outline' href='products.php?supplier_id=<?= (int)$supplierId ?>'>Cancel Edit</a>
     <?php endif; ?>
@@ -223,9 +266,9 @@ include __DIR__ . '/partials/header.php';
       <label class='field-label'>Unit</label>
       <select name='unit' required>
         <option value=''>Select Unit</option>
-        <option value='ctn' <?= (($editProduct['unit'] ?? '') === 'ctn') ? 'selected' : '' ?>>ctn</option>
-        <option value='kg' <?= (($editProduct['unit'] ?? '') === 'kg') ? 'selected' : '' ?>>kg</option>
-        <option value='pcs' <?= (($editProduct['unit'] ?? '') === 'pcs') ? 'selected' : '' ?>>pcs</option>
+        <?php foreach ($allowedUnits as $u): ?>
+          <option value='<?= esc($u) ?>' <?= (($editProduct['unit'] ?? '') === $u) ? 'selected' : '' ?>><?= esc($u) ?></option>
+        <?php endforeach; ?>
       </select>
     </div>
 
@@ -257,6 +300,36 @@ include __DIR__ . '/partials/header.php';
       <button class='btn btn-dark' name='save_product'><?= $editProduct ? 'Update Product' : 'Save Product' ?></button>
     </div>
   </form>
+</div>
+
+<div class='modal-overlay' id='unitModalOverlay' onclick='closeUnitModal()'></div>
+
+<div class='modal-box' id='unitModal'>
+  <div class='modal-head'>
+    <h2>Add Unit</h2>
+    <button type='button' class='modal-close' onclick='closeUnitModal()'>✕</button>
+  </div>
+
+  <form method='post' class='form-grid'>
+    <div class='full'>
+      <label class='field-label'>Unit Name</label>
+      <input type='text' name='unit_name' maxlength='20' placeholder='Example: box, ltr, dozen' required>
+    </div>
+    <div class='full action-row'>
+      <button class='btn btn-dark' name='add_unit'>Save Unit</button>
+    </div>
+  </form>
+
+  <div class='helper-box' style='margin-top:12px;'>
+    <strong>Existing units:</strong>
+    <div class='action-row' style='margin-top:8px;'>
+      <?php foreach ($allowedUnits as $u): ?>
+        <span class='pill'><?= esc($u) ?>
+          <a href='products.php?supplier_id=<?= (int)$supplierId ?>&delete_unit=<?= urlencode($u) ?>' onclick="return confirm('Delete this unit?')" style='margin-left:6px;color:#c00;text-decoration:none;'>✕</a>
+        </span>
+      <?php endforeach; ?>
+    </div>
+  </div>
 </div>
 <?php endif; ?>
 
