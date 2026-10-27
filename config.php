@@ -54,6 +54,9 @@ if ($admin && $admin->num_rows === 0) {
     }
 }
 
+// The main 'admin' account must always keep admin access.
+$conn->query("UPDATE users SET role='admin' WHERE username='admin' AND role<>'admin'");
+
 $supplierCount = 0; $supplierRes = $conn->query("SELECT COUNT(*) AS total FROM suppliers");
 if ($supplierRes) { $supplierCount = (int)($supplierRes->fetch_assoc()['total'] ?? 0); }
 if ($supplierCount === 0) {
