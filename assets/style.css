@@ -307,5 +307,4 @@ body{background:#f4f4f4}
 .soh-bulk-bar span{flex:1;font-size:13px;font-weight:700;color:#555}
 @media (max-width:520px){
   .soh-bulk-control{width:120px}
-  .soh-bulk-bar .btn{padding:12px 14px}
 }

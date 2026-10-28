@@ -430,7 +430,7 @@ include __DIR__ . '/partials/header.php';
   <div class='section-head soh-list-head'>
     <h2>Product List</h2>
     <?php if ($products->num_rows > 0): ?>
-      <button type='button' class='btn btn-dark' id='sohEditBtn' onclick='toggleSohEdit(true)'>Edit SOH</button>
+      <button type='button' class='btn btn-dark btn-small' id='sohEditBtn' onclick='toggleSohEdit(true)'>Edit SOH</button>
     <?php endif; ?>
   </div>
 
@@ -452,8 +452,8 @@ include __DIR__ . '/partials/header.php';
     <?php endwhile; ?>
     <div class='soh-bulk-bar'>
       <span id='sohChangedCount'>No changes yet</span>
-      <button type='button' class='btn btn-outline' onclick='toggleSohEdit(false)'>Cancel</button>
-      <button type='submit' name='save_all_soh' class='btn btn-dark'>Save All</button>
+      <button type='button' class='btn btn-outline btn-small' onclick='toggleSohEdit(false)'>Cancel</button>
+      <button type='submit' name='save_all_soh' class='btn btn-dark btn-small'>Save All</button>
     </div>
   </form>
   <?php endif; ?>
