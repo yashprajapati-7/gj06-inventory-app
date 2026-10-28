@@ -309,3 +309,8 @@ body{background:#f4f4f4}
 @media (max-width:520px){
   .soh-bulk-control{width:80px}
 }
+
+/* Prevent iOS auto-zoom on focus: inputs must be at least 16px */
+@media (max-width:899px){
+  input,select,textarea,.qty-input{font-size:16px !important}
+}
