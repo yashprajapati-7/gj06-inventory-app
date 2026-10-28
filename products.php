@@ -442,10 +442,8 @@ include __DIR__ . '/partials/header.php';
           <div class='soh-bulk-name'><?= esc($p['product_name']) ?></div>
           <div class='soh-bulk-meta'>MOS <?= (int)$p['csoh'] ?> &middot; PO <strong class='soh-bulk-po'><?= (int)$p['op'] ?></strong> <?= esc($p['unit']) ?></div>
         </div>
-        <div class='soh-control soh-bulk-control'>
-          <button type='button' class='qty-btn' onclick='changeQty(this,-1)'>−</button>
+        <div class='soh-bulk-control'>
           <input type='number' name='soh[<?= (int)$p['id'] ?>]' value='<?= (int)$p['soh'] ?>' data-orig='<?= (int)$p['soh'] ?>' min='0' step='1' inputmode='numeric' pattern='[0-9]*' class='qty-input' oninput='sohRowChanged(this)'>
-          <button type='button' class='qty-btn' onclick='changeQty(this,1)'>+</button>
         </div>
       </div>
     <?php endwhile; ?>
