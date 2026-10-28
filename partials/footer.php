@@ -20,6 +20,31 @@ function changeQty(button, amount) {
   value = value + amount;
   if (value < 0) value = 0;
   input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function toggleSohEdit(open) {
+  const form = document.getElementById('sohBulkForm');
+  const read = document.getElementById('sohReadView');
+  const btn = document.getElementById('sohEditBtn');
+  if (!form) return;
+  if (!open && form.querySelector('.soh-bulk-row.changed') && !confirm('Discard your SOH changes?')) return;
+  if (!open) form.reset();
+  form.querySelectorAll('.qty-input').forEach(sohRowChanged);
+  form.style.display = open ? 'block' : 'none';
+  if (read) read.style.display = open ? 'none' : 'block';
+  if (btn) btn.style.display = open ? 'none' : '';
+}
+
+function sohRowChanged(input) {
+  const row = input.closest('.soh-bulk-row');
+  if (!row) return;
+  const soh = Math.max(parseInt(input.value || 0, 10), 0);
+  row.querySelector('.soh-bulk-po').textContent = Math.max(parseInt(row.dataset.mos, 10) - soh, 0);
+  row.classList.toggle('changed', String(soh) !== input.dataset.orig);
+  const count = document.querySelectorAll('#sohBulkForm .soh-bulk-row.changed').length;
+  const label = document.getElementById('sohChangedCount');
+  if (label) label.textContent = count ? count + ' changed' : 'No changes yet';
 }
 
 function openProductModal() {

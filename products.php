@@ -29,6 +29,32 @@ if ($supplierId && !user_can_access_supplier($conn, $userId, $role, $supplierId)
     die('Access denied');
 }
 
+if (isset($_POST['save_all_soh'])) {
+    $sohValues = is_array($_POST['soh'] ?? null) ? $_POST['soh'] : [];
+    $select = $conn->prepare('SELECT csoh, soh FROM products WHERE id=? LIMIT 1');
+    $update = $conn->prepare('UPDATE products SET soh=?, op=? WHERE id=?');
+    $conn->begin_transaction();
+    foreach ($sohValues as $id => $value) {
+        $id = (int)$id;
+        if ($value === '' || !user_can_touch_product($conn, $userId, $role, $id)) continue;
+        $soh = max((int)$value, 0);
+        $select->bind_param('i', $id);
+        $select->execute();
+        $row = $select->get_result()->fetch_assoc();
+        if (!$row || (int)$row['soh'] === $soh) continue;
+        $po = max((int)$row['csoh'] - $soh, 0);
+        $update->bind_param('iii', $soh, $po, $id);
+        $update->execute();
+    }
+    $conn->commit();
+    $redirectParams = ['supplier_id=' . $supplierId];
+    if ($search !== '') $redirectParams[] = 'search=' . urlencode($search);
+    if ($unitFilter !== '') $redirectParams[] = 'unit=' . urlencode($unitFilter);
+    $redirectParams[] = 'msg=soh_updated';
+    header('Location: products.php?' . implode('&', $redirectParams));
+    exit;
+}
+
 if (isset($_POST['update_soh'])) {
     $id = (int)($_POST['id'] ?? 0);
     $soh = max((int)($_POST['soh'] ?? 0), 0);
@@ -401,16 +427,38 @@ include __DIR__ . '/partials/header.php';
 </section>
 
 <section class='card'>
-  <div class='section-head'>
+  <div class='section-head soh-list-head'>
     <h2>Product List</h2>
-    
+    <?php if ($products->num_rows > 0): ?>
+      <button type='button' class='btn btn-dark' id='sohEditBtn' onclick='toggleSohEdit(true)'>Edit SOH</button>
+    <?php endif; ?>
   </div>
 
-  
+  <?php if ($products->num_rows > 0): ?>
+  <form method='post' id='sohBulkForm' class='soh-bulk' style='display:none'>
+    <div class='helper-box' style='margin-bottom:12px'>Change any SOH below, then tap <strong>Save All</strong>. PO updates automatically.</div>
+    <?php mysqli_data_seek($products, 0); while ($p = $products->fetch_assoc()): ?>
+      <div class='soh-bulk-row' data-mos='<?= (int)$p['csoh'] ?>'>
+        <div class='soh-bulk-info'>
+          <div class='soh-bulk-name'><?= esc($p['product_name']) ?></div>
+          <div class='soh-bulk-meta'>MOS <?= (int)$p['csoh'] ?> &middot; PO <strong class='soh-bulk-po'><?= (int)$p['op'] ?></strong> <?= esc($p['unit']) ?></div>
+        </div>
+        <div class='soh-control soh-bulk-control'>
+          <button type='button' class='qty-btn' onclick='changeQty(this,-1)'>−</button>
+          <input type='number' name='soh[<?= (int)$p['id'] ?>]' value='<?= (int)$p['soh'] ?>' data-orig='<?= (int)$p['soh'] ?>' min='0' step='1' inputmode='numeric' pattern='[0-9]*' class='qty-input' oninput='sohRowChanged(this)'>
+          <button type='button' class='qty-btn' onclick='changeQty(this,1)'>+</button>
+        </div>
+      </div>
+    <?php endwhile; ?>
+    <div class='soh-bulk-bar'>
+      <span id='sohChangedCount'>No changes yet</span>
+      <button type='button' class='btn btn-outline' onclick='toggleSohEdit(false)'>Cancel</button>
+      <button type='submit' name='save_all_soh' class='btn btn-dark'>Save All</button>
+    </div>
+  </form>
+  <?php endif; ?>
 
-  
-
-
+  <div id='sohReadView'>
   <div class='mobile-cards product-list-layout'>
     <?php $productNumber = 1; ?>
     <?php mysqli_data_seek($products, 0); while ($p = $products->fetch_assoc()): ?>
@@ -427,19 +475,11 @@ include __DIR__ . '/partials/header.php';
         <div class='store-details'>
           <div class='store-subtitle'><?= esc($p['supplier_name']) ?></div>
 
-        <form method='post' class='store-form'>
-          <input type='hidden' name='id' value='<?= (int)$p['id'] ?>'>
-
-          <div class='store-row'>
-            <div class='store-label'>SOH</div>
-            <div class='store-control soh-control'>
-              <button type='button' class='qty-btn' onclick='changeQty(this,-1)'>−</button>
-              <input type='number' name='soh' value='<?= (int)$p['soh'] ?>' min='0' step='1' inputmode='numeric' pattern='[0-9]*' class='qty-input'>
-              <button type='button' class='qty-btn' onclick='changeQty(this,1)'>+</button>
-            </div>
-          </div>
-
           <div class='store-info-grid'>
+            <div class='mini-box'>
+              <span>SOH</span>
+              <strong><?= (int)$p['soh'] ?></strong>
+            </div>
             <div class='mini-box'>
               <span>MOS</span>
               <strong><?= (int)$p['csoh'] ?></strong>
@@ -453,9 +493,6 @@ include __DIR__ . '/partials/header.php';
               <strong><?= esc($p['unit']) ?></strong>
             </div>
           </div>
-
-          <button type='submit' name='update_soh' class='btn btn-dark full-btn'>Save SOH</button>
-        </form>
 
           <?php if (is_admin()): ?>
             <div class='action-row' style='margin-top:12px;'>
@@ -495,13 +532,7 @@ include __DIR__ . '/partials/header.php';
             <td><?= esc($p['supplier_name']) ?></td>
             <td class='product-name-cell'><?= esc($p['product_name']) ?></td>
             <td><?= esc($p['unit']) ?></td>
-            <td>
-              <form method='post' class='table-update'>
-                <input type='hidden' name='id' value='<?= (int)$p['id'] ?>'>
-                <input type='number' name='soh' value='<?= (int)$p['soh'] ?>' min='0' step='1' inputmode='numeric' pattern='[0-9]*' style='width:90px;'>
-                <button type='submit' name='update_soh' class='btn btn-small btn-outline'>Save</button>
-              </form>
-            </td>
+            <td><strong><?= (int)$p['soh'] ?></strong></td>
             <td><?= (int)$p['csoh'] ?></td>
             <td><?= (int)$p['op'] ?></td>
             <?php if (is_admin()): ?>
@@ -523,6 +554,7 @@ include __DIR__ . '/partials/header.php';
         <?php endif; ?>
       </tbody>
     </table>
+  </div>
   </div>
 </section>
 

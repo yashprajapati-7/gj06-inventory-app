@@ -294,3 +294,18 @@ body{background:#f4f4f4}
   .an-attn-row{flex-wrap:wrap}
   .an-attn-nums{width:100%;justify-content:space-around;border-top:1px solid #e6ebf1;padding-top:8px}
 }
+
+/* Bulk SOH edit */
+.soh-list-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.soh-bulk-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:14px;background:#f7f9fc;margin-bottom:8px;border:2px solid transparent}
+.soh-bulk-row.changed{border-color:#111;background:#fff}
+.soh-bulk-info{flex:1;min-width:0}
+.soh-bulk-name{font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.soh-bulk-meta{font-size:12px;color:#777;margin-top:3px}
+.soh-bulk-control{width:150px;flex-shrink:0}
+.soh-bulk-bar{position:sticky;bottom:12px;display:flex;align-items:center;gap:10px;margin-top:14px;padding:10px 12px;background:#fff;border-radius:18px;box-shadow:0 10px 28px rgba(0,0,0,.18);z-index:50}
+.soh-bulk-bar span{flex:1;font-size:13px;font-weight:700;color:#555}
+@media (max-width:520px){
+  .soh-bulk-control{width:120px}
+  .soh-bulk-bar .btn{padding:12px 14px}
+}
