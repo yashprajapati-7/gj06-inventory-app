@@ -436,7 +436,6 @@ include __DIR__ . '/partials/header.php';
 
   <?php if ($products->num_rows > 0): ?>
   <form method='post' id='sohBulkForm' class='soh-bulk' style='display:none'>
-    <div class='helper-box' style='margin-bottom:12px'>Change any SOH below, then tap <strong>Save All</strong>. PO updates automatically.</div>
     <?php mysqli_data_seek($products, 0); while ($p = $products->fetch_assoc()): ?>
       <div class='soh-bulk-row' data-mos='<?= (int)$p['csoh'] ?>'>
         <div class='soh-bulk-info'>
